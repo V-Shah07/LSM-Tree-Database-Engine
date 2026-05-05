@@ -1,10 +1,15 @@
-# Build output from CMakeLists.txt
+# Build output — regenerated from CMakeLists.txt
 build/
 
-# Compiled binaries and objects
+# Compiled binaries, objects, libraries
 *.o
 *.out
 *.a
+*.dSYM/
+
+# Stray executables in src/ from in-place compilation
+# (matches files with no extension that are actually binaries)
+src/main
 
 # macOS junk
 .DS_Store
@@ -13,10 +18,6 @@ build/
 .vscode/
 .cache/
 
-# CMake artifacts that can leak outside build/
+# CMake artifacts
 CMakeCache.txt
 CMakeFiles/
-
-# Stray binaries from single-file debugger
-src/main
-*.dSYM/
