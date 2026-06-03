@@ -1,0 +1,22 @@
+# Build output from CMakeLists.txt
+build/
+
+# Compiled binaries and objects
+*.o
+*.out
+*.a
+
+# macOS junk
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.cache/
+
+# CMake artifacts that can leak outside build/
+CMakeCache.txt
+CMakeFiles/
+
+# Stray binaries from single-file debugger
+src/main
+*.dSYM/
