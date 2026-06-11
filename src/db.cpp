@@ -50,6 +50,9 @@ bool Overlaps(const std::string& fsmall, const std::string& flarge,
 DB::DB(const Options& options, std::string dir)
     : options_(options), dir_(std::move(dir)), mem_(new SkipList()) {
   wal_path_ = dir_ + "/wal.log";
+  if (options_.block_cache_bytes > 0) {
+    block_cache_.reset(new BlockCache(options_.block_cache_bytes));
+  }
 }
 
 DB::~DB() {
@@ -170,7 +173,8 @@ Status DB::LoadManifest() {
       fm->largest.assign(p + pos, ll); pos += ll;
 
       std::unique_ptr<SSTableReader> reader;
-      Status s = SSTableReader::Open(FilePath(fm->number), &reader);
+      Status s = SSTableReader::Open(FilePath(fm->number), &reader,
+                                     block_cache_.get(), fm->number);
       if (!s.ok()) return s;
       fm->reader = std::move(reader);
       max_number = std::max(max_number, fm->number);
@@ -287,7 +291,7 @@ Status DB::FlushMemTable() {
   if (!s.ok()) return s;
 
   std::unique_ptr<SSTableReader> reader;
-  s = SSTableReader::Open(path, &reader);
+  s = SSTableReader::Open(path, &reader, block_cache_.get(), number);
   if (!s.ok()) return s;
 
   auto fm = std::make_shared<FileMeta>();
@@ -474,7 +478,7 @@ Status DB::DoCompaction(const Compaction& c) {
     Status s = w->Finish();
     if (!s.ok()) return s;
     std::unique_ptr<SSTableReader> reader;
-    s = SSTableReader::Open(cur_path, &reader);
+    s = SSTableReader::Open(cur_path, &reader, block_cache_.get(), cur_number);
     if (!s.ok()) return s;
     auto fm = std::make_shared<FileMeta>();
     fm->number = cur_number;
@@ -615,6 +619,11 @@ DB::Stats DB::GetStats() const {
   s.write_amplification =
       s.user_bytes ? static_cast<double>(s.sstable_bytes_written) / s.user_bytes
                    : 0.0;
+  if (block_cache_) {
+    s.cache_hits = block_cache_->hits();
+    s.cache_misses = block_cache_->misses();
+    s.cache_hit_rate = block_cache_->HitRate();
+  }
   std::lock_guard<std::mutex> lk(mu_);
   for (const auto& level : current_->levels) {
     int files = static_cast<int>(level.size());

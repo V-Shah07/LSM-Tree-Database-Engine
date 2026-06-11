@@ -178,7 +178,8 @@ SSTableReader::~SSTableReader() {
 }
 
 Status SSTableReader::Open(const std::string& path,
-                           std::unique_ptr<SSTableReader>* out) {
+                           std::unique_ptr<SSTableReader>* out,
+                           BlockCache* cache, uint64_t file_number) {
   int fd = ::open(path.c_str(), O_RDONLY);
   if (fd < 0) return Status::IOError("open " + path + ": " + strerror(errno));
 
@@ -202,6 +203,8 @@ Status SSTableReader::Open(const std::string& path,
   auto reader = std::unique_ptr<SSTableReader>(new SSTableReader());
   reader->base_ = static_cast<const char*>(addr);
   reader->file_size_ = size;
+  reader->cache_ = cache;
+  reader->file_number_ = file_number;
 
   const char* footer = reader->base_ + size - kFooterSize;
   uint64_t filter_offset = DecodeFixed64(footer);
@@ -294,6 +297,24 @@ Status SSTableReader::ReadBlock(size_t block_idx, std::string* out) const {
   return Status::OK();
 }
 
+Status SSTableReader::GetBlock(size_t block_idx, BlockPtr* out) const {
+  const uint64_t offset = index_[block_idx].offset;
+  if (cache_ != nullptr) {
+    BlockPtr cached = cache_->Lookup(file_number_, offset);
+    if (cached) {  // hit: skip the copy + CRC recompute entirely
+      *out = std::move(cached);
+      return Status::OK();
+    }
+  }
+  auto block = std::make_shared<std::string>();
+  Status s = ReadBlock(block_idx, block.get());  // copies + verifies CRC
+  if (!s.ok()) return s;
+  BlockPtr bp = std::move(block);
+  if (cache_ != nullptr) cache_->Insert(file_number_, offset, bp);
+  *out = std::move(bp);
+  return Status::OK();
+}
+
 LookupResult SSTableReader::Get(const std::string& key, std::string* value,
                                 Status* status) const {
   if (status) *status = Status::OK();
@@ -312,15 +333,15 @@ LookupResult SSTableReader::Get(const std::string& key, std::string* value,
   if (it == index_.begin()) return LookupResult::kNotFound;  // key < everything
   size_t block_idx = static_cast<size_t>((it - index_.begin()) - 1);
 
-  std::string block;
-  Status s = ReadBlock(block_idx, &block);
+  BlockPtr block;
+  Status s = GetBlock(block_idx, &block);
   if (!s.ok()) {
     if (status) *status = s;
     return LookupResult::kNotFound;
   }
 
-  const char* p = block.data();
-  const char* end = p + block.size();
+  const char* p = block->data();
+  const char* end = p + block->size();
   while (p < end) {
     ValueType type = static_cast<ValueType>(static_cast<unsigned char>(*p));
     p += 1;
