@@ -417,6 +417,35 @@ void SSTableReader::Iterator::SeekToFirst() {
   ParseCurrent();
 }
 
+void SSTableReader::Iterator::Seek(const std::string& target) {
+  if (reader_->index_.empty()) {
+    valid_ = false;
+    return;
+  }
+  // Binary-search the sparse index for the block that could contain target:
+  // the last block whose first key is <= target (or the first block if target
+  // precedes everything).
+  const auto& index = reader_->index_;
+  int lo = 0, hi = static_cast<int>(index.size());
+  while (lo < hi) {
+    int mid = (lo + hi) / 2;
+    if (index[mid].first_key <= target) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  size_t idx = (lo == 0) ? 0 : static_cast<size_t>(lo - 1);
+
+  LoadBlock(idx);
+  // Scan forward (crossing blocks if needed) to the first key >= target.
+  while (true) {
+    ParseCurrent();
+    if (!valid_) return;
+    if (key_ >= target) return;
+  }
+}
+
 void SSTableReader::Iterator::Next() {
   if (!valid_) return;
   ParseCurrent();

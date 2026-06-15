@@ -12,12 +12,44 @@
 #include <set>
 
 #include "lsmdb/coding.h"
+#include "lsmdb/internal_iterator.h"
 #include "lsmdb/merging_iterator.h"
 
 namespace lsmdb {
 namespace {
 
 constexpr size_t kOutputBlockSize = 4096;
+
+// Adapts the memtable's skip-list iterator to the InternalIterator interface.
+class MemIter : public InternalIterator {
+ public:
+  explicit MemIter(SkipList::Iterator it) : it_(std::move(it)) {}
+  bool Valid() const override { return it_.Valid(); }
+  void Seek(const std::string& target) override { it_.Seek(target); }
+  void Next() override { it_.Next(); }
+  const std::string& key() const override { return it_.key(); }
+  const std::string& value() const override { return it_.value(); }
+  bool IsTombstone() const override { return it_.IsTombstone(); }
+
+ private:
+  SkipList::Iterator it_;
+};
+
+// Adapts an SSTable iterator to the InternalIterator interface.
+class SstIter : public InternalIterator {
+ public:
+  explicit SstIter(SSTableReader::Iterator it) : it_(std::move(it)) {}
+  bool Valid() const override { return it_.Valid(); }
+  void Seek(const std::string& target) override { it_.Seek(target); }
+  void Next() override { it_.Next(); }
+  const std::string& key() const override { return it_.key(); }
+  const std::string& value() const override { return it_.value(); }
+  bool IsTombstone() const override { return it_.IsTombstone(); }
+  Status status() const override { return it_.status(); }
+
+ private:
+  SSTableReader::Iterator it_;
+};
 
 std::string NumberToName(uint64_t number) {
   char buf[32];
@@ -378,6 +410,77 @@ LookupResult DB::GetFromVersion(const VersionPtr& v, const std::string& key,
     if (r != LookupResult::kNotFound) return r;
   }
   return LookupResult::kNotFound;
+}
+
+Status DB::Scan(const std::string& start, const std::string& end,
+                std::vector<std::pair<std::string, std::string>>* out) const {
+  out->clear();
+
+  // Build the sources in priority order (newest first): memtable, then L0
+  // newest-first, then each deeper level.
+  std::vector<std::unique_ptr<InternalIterator>> iters;
+  iters.push_back(std::unique_ptr<InternalIterator>(
+      new MemIter(mem_->NewIterator())));
+
+  VersionPtr v;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    v = current_;
+  }
+  if (v && !v->levels.empty()) {
+    const auto& l0 = v->levels[0];
+    for (auto it = l0.rbegin(); it != l0.rend(); ++it) {
+      iters.push_back(std::unique_ptr<InternalIterator>(
+          new SstIter((*it)->reader->NewIterator())));
+    }
+    for (size_t lvl = 1; lvl < v->levels.size(); ++lvl) {
+      for (const auto& f : v->levels[lvl]) {
+        iters.push_back(std::unique_ptr<InternalIterator>(
+            new SstIter(f->reader->NewIterator())));
+      }
+    }
+  }
+
+  for (auto& it : iters) {
+    it->Seek(start);
+    if (!it->status().ok()) return it->status();
+  }
+
+  // K-way merge: at each step take the smallest key across all sources, let the
+  // highest-priority (lowest-index) source win, and skip the key if that winner
+  // is a tombstone.
+  const bool bounded = !end.empty();
+  while (true) {
+    int best = -1;
+    for (size_t i = 0; i < iters.size(); ++i) {
+      if (!iters[i]->Valid()) continue;
+      if (best < 0 || iters[i]->key() < iters[best]->key()) best = static_cast<int>(i);
+    }
+    if (best < 0) break;
+    const std::string cur = iters[best]->key();
+    if (bounded && cur >= end) break;
+
+    // Highest-priority source holding this key wins.
+    int winner = -1;
+    for (size_t i = 0; i < iters.size(); ++i) {
+      if (iters[i]->Valid() && iters[i]->key() == cur) {
+        winner = static_cast<int>(i);
+        break;
+      }
+    }
+    bool tomb = iters[winner]->IsTombstone();
+    std::string val = iters[winner]->value();
+
+    for (auto& it : iters) {
+      if (it->Valid() && it->key() == cur) it->Next();
+    }
+    if (!tomb) out->emplace_back(cur, std::move(val));
+  }
+
+  for (auto& it : iters) {
+    if (!it->status().ok()) return it->status();
+  }
+  return Status::OK();
 }
 
 // ---- compaction -------------------------------------------------------------

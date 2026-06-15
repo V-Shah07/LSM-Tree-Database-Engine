@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "lsmdb/skiplist.h"
@@ -68,6 +69,12 @@ class DB {
   Status Put(const std::string& key, const std::string& value);
   Status Delete(const std::string& key);
   LookupResult Get(const std::string& key, std::string* value) const;
+
+  // Range scan over [start, end): returns live key/value pairs in ascending key
+  // order, merged across the memtable and every SSTable with newest-wins /
+  // tombstone semantics. An empty `end` means "to the last key".
+  Status Scan(const std::string& start, const std::string& end,
+              std::vector<std::pair<std::string, std::string>>* out) const;
 
   Stats GetStats() const;
 

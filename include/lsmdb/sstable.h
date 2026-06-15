@@ -141,6 +141,7 @@ class SSTableReader {
     bool Valid() const { return valid_; }
     Status status() const { return status_; }
     void SeekToFirst();
+    void Seek(const std::string& target);  // first key >= target
     void Next();
     const std::string& key() const { return key_; }
     const std::string& value() const { return value_; }
