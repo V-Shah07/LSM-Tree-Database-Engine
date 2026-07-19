@@ -16,6 +16,8 @@ add_compile_options(-Wall -Wextra)
 # Sources are added phase by phase as the engine grows.
 add_library(lsmdb
   src/skiplist.cpp
+  src/crc32.cpp
+  src/sstable.cpp
 )
 target_include_directories(lsmdb PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
@@ -28,6 +30,8 @@ find_package(GTest QUIET)
 
 add_executable(lsmdb_tests
   tests/test_skiplist.cpp
+  tests/test_crc32.cpp
+  tests/test_sstable.cpp
 )
 target_link_libraries(lsmdb_tests PRIVATE lsmdb)
 if(GTest_FOUND)
