@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "lsmdb/bloom.h"
+#include "lsmdb/cache.h"     // BlockCache, BlockPtr
 #include "lsmdb/skiplist.h"  // LookupResult
 #include "lsmdb/status.h"
 
@@ -103,8 +104,11 @@ class SSTableReader {
  public:
   ~SSTableReader();
 
+  // `cache` (optional) and `file_number` enable the shared LRU block cache for
+  // point lookups; pass nullptr to read straight from the mmap every time.
   static Status Open(const std::string& path,
-                     std::unique_ptr<SSTableReader>* out);
+                     std::unique_ptr<SSTableReader>* out,
+                     BlockCache* cache = nullptr, uint64_t file_number = 0);
 
   // Point lookup. kFound/kDeleted mean the key is resolved by *this* table;
   // kNotFound means the caller should consult older tables.
@@ -170,11 +174,16 @@ class SSTableReader {
 
   // Copy block block_idx's data out of the mmap, verifying its CRC.
   Status ReadBlock(size_t block_idx, std::string* out) const;
+  // Cache-aware block fetch used by point lookups: consults the LRU cache and
+  // populates it on a miss.
+  Status GetBlock(size_t block_idx, BlockPtr* out) const;
 
   const char* base_ = nullptr;
   size_t file_size_ = 0;
   std::vector<IndexEntry> index_;
   BloomFilter filter_;
+  BlockCache* cache_ = nullptr;
+  uint64_t file_number_ = 0;
   uint64_t num_entries_ = 0;
   std::string smallest_key_;
   std::string largest_key_;

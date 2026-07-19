@@ -19,6 +19,7 @@ add_library(lsmdb
   src/crc32.cpp
   src/hash.cpp
   src/bloom.cpp
+  src/cache.cpp
   src/sstable.cpp
   src/merging_iterator.cpp
   src/wal.cpp
@@ -40,6 +41,7 @@ add_executable(lsmdb_tests
   tests/test_sstable.cpp
   tests/test_recovery.cpp
   tests/test_compaction.cpp
+  tests/test_cache.cpp
 )
 target_link_libraries(lsmdb_tests PRIVATE lsmdb)
 if(GTest_FOUND)
@@ -59,3 +61,6 @@ target_link_libraries(bench_bloom PRIVATE lsmdb)
 
 add_executable(bench_compaction bench/bench_compaction.cpp)
 target_link_libraries(bench_compaction PRIVATE lsmdb)
+
+add_executable(bench_cache bench/bench_cache.cpp)
+target_link_libraries(bench_cache PRIVATE lsmdb)

@@ -39,6 +39,7 @@ struct Options {
   size_t target_file_size = 2 * 1024 * 1024;         // split outputs at 2 MB
   int max_levels = 7;
   int bloom_bits_per_key = 10;
+  size_t block_cache_bytes = 8 * 1024 * 1024;        // LRU block cache; 0 = off
 };
 
 class DB {
@@ -51,6 +52,9 @@ class DB {
     double write_amplification = 0.0;    // sstable_bytes_written / user_bytes
     std::vector<int> files_per_level;
     std::vector<uint64_t> bytes_per_level;
+    uint64_t cache_hits = 0;
+    uint64_t cache_misses = 0;
+    double cache_hit_rate = 0.0;
   };
 
   ~DB();
@@ -129,6 +133,7 @@ class DB {
   std::string wal_path_;
 
   std::unique_ptr<SkipList> mem_;
+  std::unique_ptr<BlockCache> block_cache_;
   WalWriter wal_;
 
   mutable std::mutex mu_;
