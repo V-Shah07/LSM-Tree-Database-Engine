@@ -20,6 +20,7 @@ add_library(lsmdb
   src/hash.cpp
   src/bloom.cpp
   src/sstable.cpp
+  src/merging_iterator.cpp
   src/wal.cpp
   src/db.cpp
 )
@@ -38,6 +39,7 @@ add_executable(lsmdb_tests
   tests/test_bloom.cpp
   tests/test_sstable.cpp
   tests/test_recovery.cpp
+  tests/test_compaction.cpp
 )
 target_link_libraries(lsmdb_tests PRIVATE lsmdb)
 if(GTest_FOUND)
@@ -54,3 +56,6 @@ gtest_discover_tests(lsmdb_tests)
 # Standalone drivers that produce the numbers behind the resume bullets.
 add_executable(bench_bloom bench/bench_bloom.cpp)
 target_link_libraries(bench_bloom PRIVATE lsmdb)
+
+add_executable(bench_compaction bench/bench_compaction.cpp)
+target_link_libraries(bench_compaction PRIVATE lsmdb)
