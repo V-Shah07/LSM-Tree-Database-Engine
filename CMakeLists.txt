@@ -17,6 +17,8 @@ add_compile_options(-Wall -Wextra)
 add_library(lsmdb
   src/skiplist.cpp
   src/crc32.cpp
+  src/hash.cpp
+  src/bloom.cpp
   src/sstable.cpp
   src/wal.cpp
   src/db.cpp
@@ -33,6 +35,7 @@ find_package(GTest QUIET)
 add_executable(lsmdb_tests
   tests/test_skiplist.cpp
   tests/test_crc32.cpp
+  tests/test_bloom.cpp
   tests/test_sstable.cpp
   tests/test_recovery.cpp
 )
@@ -46,3 +49,8 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(lsmdb_tests)
+
+# ---- Benchmarks / measurement drivers ---------------------------------------
+# Standalone drivers that produce the numbers behind the resume bullets.
+add_executable(bench_bloom bench/bench_bloom.cpp)
+target_link_libraries(bench_bloom PRIVATE lsmdb)

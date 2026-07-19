@@ -7,8 +7,9 @@
 //   [ data block 0 ][ crc32 ]
 //   [ data block 1 ][ crc32 ]
 //   ...
+//   [ filter block ][ crc32 ]   (bloom filter over every key)
 //   [ index block  ][ crc32 ]
-//   [ footer (fixed 28 bytes) ]
+//   [ footer (fixed 44 bytes) ]
 //
 // A data block is a run of records:
 //   u8  type (0=value, 1=tombstone)
@@ -25,7 +26,9 @@
 // the one block that could hold the key, then scans just that block. This is
 // what gives O(log n) point lookups without scanning the whole file.
 //
-// The footer (at a fixed offset from EOF) points at the index:
+// The footer (at a fixed offset from EOF) points at the filter and index:
+//   u64 filter_offset
+//   u64 filter_length     (bytes of filter data, excluding its trailing crc)
 //   u64 index_offset
 //   u64 index_length      (bytes of index data, excluding its trailing crc)
 //   u64 num_entries
@@ -36,6 +39,7 @@
 #include <string>
 #include <vector>
 
+#include "lsmdb/bloom.h"
 #include "lsmdb/skiplist.h"  // LookupResult
 #include "lsmdb/status.h"
 
@@ -43,8 +47,9 @@ namespace lsmdb {
 
 enum class ValueType : uint8_t { kValue = 0, kTombstone = 1 };
 
-constexpr uint32_t kSSTableMagic = 0x4C534D42;  // "LSMB"
-constexpr size_t kFooterSize = 8 + 8 + 8 + 4;   // 28 bytes
+constexpr uint32_t kSSTableMagic = 0x4C534D42;      // "LSMB"
+constexpr size_t kFooterSize = 8 + 8 + 8 + 8 + 8 + 4;  // 44 bytes
+constexpr int kDefaultBloomBitsPerKey = 10;
 
 // ---- Writer -----------------------------------------------------------------
 // Records must be Add()ed in ascending key order (the memtable iterator already
@@ -52,7 +57,8 @@ constexpr size_t kFooterSize = 8 + 8 + 8 + 4;   // 28 bytes
 // footer, and fsyncs.
 class SSTableWriter {
  public:
-  explicit SSTableWriter(std::string path, size_t block_size = 4096);
+  explicit SSTableWriter(std::string path, size_t block_size = 4096,
+                         int bloom_bits_per_key = kDefaultBloomBitsPerKey);
   ~SSTableWriter();
 
   Status Open();
@@ -81,6 +87,7 @@ class SSTableWriter {
   std::string block_buf_;
   std::string block_first_key_;
   std::vector<IndexEntry> index_;
+  BloomBuilder bloom_;
   bool finished_ = false;
 };
 
@@ -107,6 +114,20 @@ class SSTableReader {
   const std::string& smallest_key() const { return smallest_key_; }
   const std::string& largest_key() const { return largest_key_; }
   uint64_t num_entries() const { return num_entries_; }
+
+  // Whether this table carries a bloom filter, and access for measurement.
+  bool has_filter() const { return filter_.valid(); }
+  const BloomFilter& filter() const { return filter_; }
+
+  // Number of data blocks copied+CRC-verified since Open (or the last
+  // ResetStats). The bloom filter's job is to keep this near zero for
+  // missing-key lookups; the Phase 4 benchmark reads it directly.
+  uint64_t blocks_read() const { return blocks_read_; }
+  void ResetStats() const { blocks_read_ = 0; }
+
+  // Toggle the bloom short-circuit. Used only by the benchmark to measure the
+  // with/without-filter difference; production reads always leave it on.
+  void SetFilterEnabled(bool on) const { filter_enabled_ = on; }
 
   // Ordered iterator over every record (values and tombstones). Used by
   // compaction and range scans in later phases.
@@ -153,9 +174,13 @@ class SSTableReader {
   const char* base_ = nullptr;
   size_t file_size_ = 0;
   std::vector<IndexEntry> index_;
+  BloomFilter filter_;
   uint64_t num_entries_ = 0;
   std::string smallest_key_;
   std::string largest_key_;
+
+  mutable uint64_t blocks_read_ = 0;
+  mutable bool filter_enabled_ = true;
 };
 
 }  // namespace lsmdb

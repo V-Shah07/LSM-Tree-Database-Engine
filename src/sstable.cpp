@@ -31,8 +31,11 @@ void AppendRecord(std::string* buf, const std::string& key,
 
 // ===== Writer ================================================================
 
-SSTableWriter::SSTableWriter(std::string path, size_t block_size)
-    : path_(std::move(path)), block_size_(block_size) {}
+SSTableWriter::SSTableWriter(std::string path, size_t block_size,
+                             int bloom_bits_per_key)
+    : path_(std::move(path)),
+      block_size_(block_size),
+      bloom_(bloom_bits_per_key) {}
 
 SSTableWriter::~SSTableWriter() {
   if (fd_ >= 0) ::close(fd_);
@@ -61,6 +64,7 @@ Status SSTableWriter::Add(const std::string& key, const std::string& value,
                           ValueType type) {
   if (block_buf_.empty()) block_first_key_ = key;
   AppendRecord(&block_buf_, key, value, type);
+  bloom_.Add(key);
   ++num_entries_;
   if (block_buf_.size() >= block_size_) return FlushBlock();
   return Status::OK();
@@ -92,6 +96,20 @@ Status SSTableWriter::Finish() {
   Status s = FlushBlock();
   if (!s.ok()) return s;
 
+  // Filter block: a bloom filter over every key, checksummed like a data block.
+  std::string filter_buf = bloom_.Finish();
+  const uint64_t filter_offset = offset_;
+  const uint64_t filter_length = filter_buf.size();
+  s = WriteRaw(filter_buf.data(), filter_buf.size());
+  if (!s.ok()) return s;
+  {
+    std::string crc_buf;
+    PutFixed32(&crc_buf, Crc32(filter_buf));
+    s = WriteRaw(crc_buf.data(), crc_buf.size());
+    if (!s.ok()) return s;
+  }
+  offset_ += filter_length + 4;
+
   // Index block: one length-prefixed first_key + offset + length per data block.
   std::string index_buf;
   for (const auto& e : index_) {
@@ -112,6 +130,8 @@ Status SSTableWriter::Finish() {
 
   // Footer.
   std::string footer;
+  PutFixed64(&footer, filter_offset);
+  PutFixed64(&footer, filter_length);
   PutFixed64(&footer, index_offset);
   PutFixed64(&footer, index_length);
   PutFixed64(&footer, num_entries_);
@@ -184,15 +204,18 @@ Status SSTableReader::Open(const std::string& path,
   reader->file_size_ = size;
 
   const char* footer = reader->base_ + size - kFooterSize;
-  uint64_t index_offset = DecodeFixed64(footer);
-  uint64_t index_length = DecodeFixed64(footer + 8);
-  uint64_t num_entries = DecodeFixed64(footer + 16);
-  uint32_t magic = DecodeFixed32(footer + 24);
+  uint64_t filter_offset = DecodeFixed64(footer);
+  uint64_t filter_length = DecodeFixed64(footer + 8);
+  uint64_t index_offset = DecodeFixed64(footer + 16);
+  uint64_t index_length = DecodeFixed64(footer + 24);
+  uint64_t num_entries = DecodeFixed64(footer + 32);
+  uint32_t magic = DecodeFixed32(footer + 40);
   if (magic != kSSTableMagic) {
     return Status::Corruption("bad SSTable magic in " + path);
   }
-  if (index_offset + index_length + 4 > size) {
-    return Status::Corruption("index extends past EOF in " + path);
+  if (index_offset + index_length + 4 > size ||
+      filter_offset + filter_length + 4 > size) {
+    return Status::Corruption("metadata extends past EOF in " + path);
   }
 
   // Verify the index CRC before trusting any offsets it hands out.
@@ -220,6 +243,16 @@ Status SSTableReader::Open(const std::string& path,
   }
   reader->num_entries_ = num_entries;
 
+  // Load the bloom filter block (CRC-verified) into memory.
+  if (filter_length > 0) {
+    const char* fdata = reader->base_ + filter_offset;
+    uint32_t stored_crc = DecodeFixed32(fdata + filter_length);
+    if (Crc32(fdata, filter_length) != stored_crc) {
+      return Status::Corruption("filter CRC mismatch in " + path);
+    }
+    reader->filter_.Reset(std::string(fdata, filter_length));
+  }
+
   // Derive smallest/largest key (used later for compaction overlap checks).
   if (!reader->index_.empty()) {
     reader->smallest_key_ = reader->index_.front().first_key;
@@ -239,6 +272,9 @@ Status SSTableReader::Open(const std::string& path,
     }
   }
 
+  // The last-block scan above counts as internal bookkeeping, not a user read.
+  reader->blocks_read_ = 0;
+
   *out = std::move(reader);
   return Status::OK();
 }
@@ -254,6 +290,7 @@ Status SSTableReader::ReadBlock(size_t block_idx, std::string* out) const {
     return Status::Corruption("block CRC mismatch");
   }
   out->assign(data, e.length);
+  ++blocks_read_;
   return Status::OK();
 }
 
@@ -261,6 +298,12 @@ LookupResult SSTableReader::Get(const std::string& key, std::string* value,
                                 Status* status) const {
   if (status) *status = Status::OK();
   if (index_.empty()) return LookupResult::kNotFound;
+
+  // Bloom short-circuit: if the filter rules the key out, skip the block read
+  // entirely. This is the O(1) "definitely not here" that avoids disk I/O.
+  if (filter_enabled_ && filter_.valid() && !filter_.MayContain(key)) {
+    return LookupResult::kNotFound;
+  }
 
   // Find the last block whose first_key <= key.
   auto it = std::upper_bound(
