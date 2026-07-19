@@ -42,6 +42,7 @@ add_executable(lsmdb_tests
   tests/test_recovery.cpp
   tests/test_compaction.cpp
   tests/test_cache.cpp
+  tests/test_scan.cpp
 )
 target_link_libraries(lsmdb_tests PRIVATE lsmdb)
 if(GTest_FOUND)
@@ -64,3 +65,26 @@ target_link_libraries(bench_compaction PRIVATE lsmdb)
 
 add_executable(bench_cache bench/bench_cache.cpp)
 target_link_libraries(bench_cache PRIVATE lsmdb)
+
+# Google Benchmark microbenchmarks (throughput + latency percentiles).
+find_library(BENCHMARK_LIB benchmark)
+if(BENCHMARK_LIB)
+  add_executable(bench_gbench bench/bench_gbench.cpp)
+  target_link_libraries(bench_gbench PRIVATE lsmdb ${BENCHMARK_LIB} Threads::Threads)
+  message(STATUS "Google Benchmark found: building bench_gbench")
+else()
+  message(STATUS "Google Benchmark not found: skipping bench_gbench")
+endif()
+
+# The RocksDB comparison benchmark only builds if RocksDB is present.
+find_library(ROCKSDB_LIB rocksdb)
+find_path(ROCKSDB_INCLUDE rocksdb/db.h)
+if(ROCKSDB_LIB AND ROCKSDB_INCLUDE)
+  add_executable(bench_vs_rocksdb bench/bench_vs_rocksdb.cpp)
+  target_include_directories(bench_vs_rocksdb PRIVATE ${ROCKSDB_INCLUDE})
+  target_link_libraries(bench_vs_rocksdb PRIVATE lsmdb ${ROCKSDB_LIB}
+    Threads::Threads ${CMAKE_DL_LIBS})
+  message(STATUS "RocksDB found: building bench_vs_rocksdb")
+else()
+  message(STATUS "RocksDB not found: skipping bench_vs_rocksdb")
+endif()

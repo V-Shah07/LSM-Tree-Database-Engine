@@ -108,6 +108,16 @@ void SkipList::Iterator::SeekToFirst() {
   node_ = list_->head_->forward[0];
 }
 
+void SkipList::Iterator::Seek(const std::string& target) {
+  SkipList::Node* x = list_->head_;
+  for (int i = list_->level_ - 1; i >= 0; --i) {
+    while (x->forward[i] != nullptr && x->forward[i]->key < target) {
+      x = x->forward[i];
+    }
+  }
+  node_ = x->forward[0];  // first node with key >= target (or nullptr)
+}
+
 void SkipList::Iterator::Next() {
   node_ = static_cast<Node*>(node_)->forward[0];
 }

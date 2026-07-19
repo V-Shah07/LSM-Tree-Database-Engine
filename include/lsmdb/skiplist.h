@@ -56,6 +56,7 @@ class SkipList {
     explicit Iterator(const SkipList* list);
     bool Valid() const { return node_ != nullptr; }
     void SeekToFirst();
+    void Seek(const std::string& target);  // first key >= target
     void Next();
     const std::string& key() const;
     const std::string& value() const;
