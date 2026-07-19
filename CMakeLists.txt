@@ -18,6 +18,8 @@ add_library(lsmdb
   src/skiplist.cpp
   src/crc32.cpp
   src/sstable.cpp
+  src/wal.cpp
+  src/db.cpp
 )
 target_include_directories(lsmdb PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
@@ -32,6 +34,7 @@ add_executable(lsmdb_tests
   tests/test_skiplist.cpp
   tests/test_crc32.cpp
   tests/test_sstable.cpp
+  tests/test_recovery.cpp
 )
 target_link_libraries(lsmdb_tests PRIVATE lsmdb)
 if(GTest_FOUND)
